@@ -13,11 +13,29 @@ unsigned int switchEndianness(unsigned int x) {
     return byte3 | byte2 | byte1 | byte0;
 }
 
+size_t freadwrite(
+    void *__ptr,
+    size_t __size,
+    size_t __nitems,
+    FILE *__srcStream, FILE *__targetStream) {
+
+    size_t bytesRead = fread(__ptr, __size, __nitems, __srcStream);
+    size_t bytesWritten = fwrite(__ptr, __size, __nitems, __targetStream);
+
+    return bytesRead + bytesWritten;
+}
+
 int main() {
     FILE *f;
+    FILE *dest;
 
-    if (f = fopen("./sample.wav", "rb"); f == nullptr) {
+    if (f = fopen("./audio/WhiteNoise.wav", "rb"); f == nullptr) {
         std::cerr << "Error opening file" << std::endl;
+        return 1;
+    }
+
+    if (dest = fopen("./filtered.wav", "wb"); f == nullptr) {
+        std::cerr << "Error opening dest file" << std::endl;
         return 1;
     }
 
@@ -27,13 +45,34 @@ int main() {
     char format[5];
     format[4] = 0;
 
-    fread(chunkID, 1, 4, f);
-    fread(&chunkSize, 4, 1, f);
-    fread(format, 1, 4, f);
+    int bruh[17];
+
+    //
+
+    freadwrite(chunkID, 1, 4, f, dest);
+    freadwrite(&chunkSize, 4, 1, f, dest);
+    freadwrite(format, 1, 4, f, dest);
 
     printf("Chunk ID: %s\n", chunkID);
     printf("File Size: %uB\n", chunkSize);
     printf("Format: %s\n", format);
+
+    char subchunk0ID[5];
+    subchunk0ID[4] = 0;
+    unsigned int subchunk0Size;
+
+    freadwrite(subchunk0ID, 1, 4, f, dest);
+    freadwrite(&subchunk0Size, 4, 1, f, dest);
+
+    printf("Subchunk0 ID: %s\n", subchunk0ID);
+    printf("Subchunk0 Size: %uB\n", subchunk0Size);
+
+    // TODO: handle both types of .wav files
+
+    freadwrite(bruh, 4, 16, f, dest);
+
+
+    //fread(bruh, 4, 5, f);
 
     char subchunk1ID[5];
     subchunk1ID[4] = 0;
@@ -45,14 +84,14 @@ int main() {
     unsigned short blockAlign;
     unsigned short bitsPerSample;
 
-    fread(subchunk1ID, 1, 4, f);
-    fread(&subchunk1Size, 4, 1, f);
-    fread(&audioFormat, 2, 1, f);
-    fread(&numChannels, 2, 1, f);
-    fread(&sampleRate, 4, 1, f);
-    fread(&byteRate, 4, 1, f);
-    fread(&blockAlign, 2, 1, f);
-    fread(&bitsPerSample, 2, 1, f);
+    freadwrite(subchunk1ID, 1, 4, f, dest);
+    freadwrite(&subchunk1Size, 4, 1, f, dest);
+    freadwrite(&audioFormat, 2, 1, f, dest);
+    freadwrite(&numChannels, 2, 1, f, dest);
+    freadwrite(&sampleRate, 4, 1, f, dest);
+    freadwrite(&byteRate, 4, 1, f, dest);
+    freadwrite(&blockAlign, 2, 1, f, dest);
+    freadwrite(&bitsPerSample, 2, 1, f, dest);
 
     printf("Subchunk1 ID: %s\n", subchunk1ID);
     printf("Subchunk1 Size: %uB\n", subchunk1Size);
@@ -65,12 +104,15 @@ int main() {
     printf("Bits Per Sample: %hu\n", bitsPerSample);
 
     unsigned short bytesPerSample = bitsPerSample / 8;
+    printf("Bytes per Sample: %hu\n", bytesPerSample);
+
+
     char subchunk2ID[5];
     subchunk2ID[4] = 0;
     unsigned int subchunk2Size;
 
-    fread(subchunk2ID, 1, 4, f);
-    fread(&subchunk2Size, 4, 1, f);
+    freadwrite(subchunk2ID, 1, 4, f, dest);
+    freadwrite(&subchunk2Size, 4, 1, f, dest);
 
     const size_t numSamples = subchunk2Size / blockAlign;
 
@@ -78,53 +120,105 @@ int main() {
     printf("Subchunk2 Size: %uB\n", subchunk2Size);
     printf("Total number of samples: %lu\n", numSamples);
 
+    std::vector<unsigned int> dataLeft;
+    dataLeft.reserve(numSamples);
+    std::vector<unsigned int> dataRight;
+    dataRight.reserve(numSamples);
 
 
-    unsigned short currL, currR;
+    for (unsigned int i = 0; i < numSamples; ++i) {
+        //unsigned short currL, currR;
+        fread(&dataLeft[i], bytesPerSample, 1, f);
+        fread(&dataRight[i], bytesPerSample, 1, f);
+
+        if (i % 100000 == 0) {
+            printf("%u read %u\n", i, dataLeft[i]);
+        }
+
+        //fwrite(&currL, bytesPerSample, 1, dest);
+        //fwrite(&currR, bytesPerSample, 1, dest);
+    }
+
+    size_t samplesLeft = numSamples;
 
     Eigen::Index offset = 10000;
-    Eigen::Index fftBuffer = 1024 << 2;
-
+    //long bufsz = 1 << 10;
+    Eigen::Index fftBuffer = 1 << 15;
     printf("Buffer Size: %ld\n", fftBuffer);
 
-    Eigen::VectorXd lVec(fftBuffer);
-    Eigen::VectorXd rVec(fftBuffer);
-
-    for (Eigen::Index i = offset; i < offset + fftBuffer; ++i) {
-        fread(&currL, bytesPerSample, 1, f);
-        fread(&currR, bytesPerSample, 1, f);
-        lVec(i-offset) = currL;
-        rVec(i-offset) = currR;
-    }
-
-    printf("Read data.\n");
-
     Eigen::FFT<double> fft;
-    printf("hmm\n");
 
-    const Eigen::VectorXcd cl = fft.fwd(lVec);
-    printf("Left FFT done.\n");
-    const Eigen::VectorXcd cr = fft.fwd(rVec);
-    printf("Right FFT done.\n");
 
-    std::vector<double> vec{};
 
-    int count = 0;
-    int max_count = fftBuffer / 10;
+    while (samplesLeft > 0) {
+        if (samplesLeft < fftBuffer) {
+            fftBuffer = samplesLeft;
+        }
+        printf("%lu samples left\n", samplesLeft);
 
-    for (std::complex<double> z : cl) {
-        if (count >= max_count) break;
-        //std::cout << std::sqrt(z.imag()*z.imag() + z.real() * z.real()) << std::endl;
-        vec.push_back(std::sqrt(z.imag()*z.imag() * z.real()*z.real()));
-        ++count;
+        const double buf = static_cast<double>(fftBuffer);
+        const double ctf = buf / 2.1;
+
+        const int cutoff = static_cast<int>(ctf);
+        const int plotCutoff = static_cast<int>(ctf);
+
+        size_t begin = numSamples - samplesLeft;
+        samplesLeft -= fftBuffer;
+
+        Eigen::VectorXd lVec(fftBuffer);
+        Eigen::VectorXd rVec(fftBuffer);
+
+        for (Eigen::Index i = 0; i < fftBuffer; ++i) {
+            lVec(i) = dataLeft[begin+i];
+            rVec(i) = dataRight[begin+i];
+        }
+
+        Eigen::VectorXcd cl = fft.fwd(lVec);
+        Eigen::VectorXcd cr = fft.fwd(rVec);
+
+        std::vector<double> plotData{};
+
+        const Eigen::VectorXd::Index m = lVec.size() / 2;
+
+        for (Eigen::Index i = 0; i < cl.size(); ++i) {
+            if (i < plotCutoff) plotData.push_back(std::sqrt(cl(i).real()*cl(i).real()+cr(i).imag()*cr(i).imag()));
+        }
+
+        for (int j = -cutoff; j <= cutoff; ++j) {
+            if (m + j < 0 || m + j >= fftBuffer) continue;
+            cl(m + j) = std::complex<double>(0, 0);
+            cr(m + j) = std::complex<double>(0, 0);
+        }
+
+        Eigen::VectorXd invL = fft.inv(cl).real();
+        Eigen::VectorXd invR = fft.inv(cr).real();
+
+        for (Eigen::Index i = 0; i < fftBuffer; ++i) {
+            dataLeft[begin+i] = static_cast<unsigned int>(invL(i));
+            dataRight[begin+i] = static_cast<unsigned int>(invR(i));
+        }
+
+        std::string s =  "./plots/plot";
+        s.append(std::to_string(samplesLeft));
+        s.append(".png");
+
+        plt::plot(plotData);
+        plt::save(s);
     }
 
-    std::cout << "size: " << cl.size() << ", " << fftBuffer << std::endl;
-
-    plt::plot(vec);
-    plt::show();
+    // write back
+    for (unsigned int i = 0; i < numSamples; ++i) {
+        //unsigned short l = dataLeft[i];
+        //unsigned short r = dataRight[i];
+        if (i % 100000 == 0) {
+            printf("%u write %u\n", i, dataLeft[i]);
+        }
+        fwrite(&dataLeft[i], bytesPerSample, 1, dest);
+        fwrite(&dataRight[i], bytesPerSample, 1, dest);
+    }
 
     fclose(f);
+    fclose(dest);
 
     return 0;
 }
